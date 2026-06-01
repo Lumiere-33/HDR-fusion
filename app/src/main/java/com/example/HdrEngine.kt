@@ -292,24 +292,29 @@ object HdrEngine {
             }
         }
 
-        // Return negative displacement since we need to apply the INVERSE translation to align the image
-        return@withContext AlignmentResult(-bestDx, -bestDy)
+        return@withContext AlignmentResult(bestDx, bestDy)
     }
 
     // High quality translation offset shifting utilizing Hardware-Accelerated Canvas
-    fun refineAndShiftBitmap(refWidth: Int, refHeight: Int, target: Bitmap, offsetDx: Int, offsetDy: Int, scaleFactor: Float): Bitmap {
+    fun refineAndShiftBitmap(refWidth: Int, refHeight: Int, target: Bitmap, tx: Float, ty: Float): Bitmap {
         val result = Bitmap.createBitmap(refWidth, refHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(result)
-        
-        // Compute scaled translate offset values using specific scale for x and y
-        val tx = offsetDx * (refWidth.toFloat() / 128f)
-        val ty = offsetDy * (refHeight.toFloat() / 128f)
         
         val paint = android.graphics.Paint().apply {
             isAntiAlias = true
             isFilterBitmap = true
         }
-        canvas.drawBitmap(target, tx, ty, paint)
+
+        val matrix = Matrix().apply {
+            // First scale target to fit refWidth & refHeight perfectly if dimensions differ
+            if (target.width != refWidth || target.height != refHeight) {
+                postScale(refWidth.toFloat() / target.width, refHeight.toFloat() / target.height)
+            }
+            // Then translate by the calculated displacement tx, ty
+            postTranslate(tx, ty)
+        }
+
+        canvas.drawBitmap(target, matrix, paint)
         return result
     }
 

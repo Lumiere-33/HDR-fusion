@@ -45,6 +45,7 @@ class HdrViewModel : ViewModel() {
     val uiState: StateFlow<HdrUiState> = _uiState.asStateFlow()
 
     private var blendJob: Job? = null
+    private var alignmentJob: Job? = null
 
     fun addLog(message: String) {
         _uiState.update { currentState ->
@@ -70,10 +71,10 @@ class HdrViewModel : ViewModel() {
             return
         }
 
-        viewModelScope.launch {
-            val oldImages = _uiState.value.selectedImages
-            val oldBlended = _uiState.value.blendedPreviewBitmap
+        alignmentJob?.cancel()
+        blendJob?.cancel()
 
+        viewModelScope.launch {
             _uiState.update { 
                 it.copy(
                     selectedImages = emptyList(),
@@ -84,10 +85,6 @@ class HdrViewModel : ViewModel() {
                     savedUri = null
                 )
             }
-
-            // Immediately recycle older bitmaps to free native memory
-            oldImages.forEach { it.bitmap?.recycle() }
-            oldBlended?.recycle()
 
             addLog("Preparing image pipeline...")
 
@@ -124,8 +121,8 @@ class HdrViewModel : ViewModel() {
     }
 
     fun removeImage(id: String) {
-        val removed = _uiState.value.selectedImages.find { it.id == id }
-        removed?.bitmap?.recycle()
+        alignmentJob?.cancel()
+        blendJob?.cancel()
 
         _uiState.update { currentState ->
             val updated = currentState.selectedImages.filter { it.id != id }
@@ -144,8 +141,8 @@ class HdrViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
-        _uiState.value.selectedImages.forEach { it.bitmap?.recycle() }
-        _uiState.value.blendedPreviewBitmap?.recycle()
+        alignmentJob?.cancel()
+        blendJob?.cancel()
     }
 
     fun setAlignmentMode(mode: AlignmentMode) {
@@ -212,7 +209,8 @@ class HdrViewModel : ViewModel() {
         val images = _uiState.value.selectedImages
         if (images.size < 2) return
 
-        viewModelScope.launch {
+        alignmentJob?.cancel()
+        alignmentJob = viewModelScope.launch {
             _uiState.update { 
                 it.copy(
                     processState = ProcessState.ALIGNING,
@@ -280,25 +278,29 @@ class HdrViewModel : ViewModel() {
                     val targetImg = images[i]
                     val tBitmap = targetImg.bitmap ?: continue
 
-                    // Check chosen alignment coefficients
-                    val (dx, dy) = when (state.alignmentMode) {
-                        AlignmentMode.AUTO -> Pair(targetImg.autoDx, targetImg.autoDy)
-                        AlignmentMode.MANUAL -> Pair(targetImg.manualDx, targetImg.manualDy)
-                        AlignmentMode.NONE -> Pair(0, 0)
+                    // Calculate perfect scaled tx, ty displacement
+                    val (tx, ty) = when (state.alignmentMode) {
+                        AlignmentMode.AUTO -> {
+                            val scaleX = refW.toFloat() / 128f
+                            val scaleY = refH.toFloat() / 128f
+                            // Auto alignment offset needs to be inverted (negated) to register image back
+                            Pair(-targetImg.autoDx * scaleX, -targetImg.autoDy * scaleY)
+                        }
+                        AlignmentMode.MANUAL -> {
+                            Pair(targetImg.manualDx.toFloat(), targetImg.manualDy.toFloat())
+                        }
+                        AlignmentMode.NONE -> {
+                            Pair(0f, 0f)
+                        }
                     }
 
                     // Create hardware shifted bitmap alignment
-                    // For preview, our bitmaps are already loaded at scale (maxDimension 1000)
-                    // We estimate dx, dy on a 128x128 grid.
-                    // So state estimation ratio is width / 128f
-                    val scaleFactor = refW.toFloat() / 128f
                     val shifted = HdrEngine.refineAndShiftBitmap(
                         refWidth = refW,
                         refHeight = refH,
                         target = tBitmap,
-                        offsetDx = dx,
-                        offsetDy = dy,
-                        scaleFactor = scaleFactor
+                        tx = tx,
+                        ty = ty
                     )
                     alignedList.add(shifted)
                 }
@@ -316,8 +318,6 @@ class HdrViewModel : ViewModel() {
 
                 ensureActive()
 
-                val oldPreview = _uiState.value.blendedPreviewBitmap
-
                 _uiState.update { 
                     it.copy(
                         blendedPreviewBitmap = blended,
@@ -327,18 +327,6 @@ class HdrViewModel : ViewModel() {
                 }
                 success = true
 
-                if (oldPreview != null && oldPreview != blended) {
-                    viewModelScope.launch(Dispatchers.Default) {
-                        kotlinx.coroutines.delay(150)
-                        if (!oldPreview.isRecycled) {
-                            try {
-                                oldPreview.recycle()
-                            } catch (e: Exception) {
-                                // Safe catch-all
-                            }
-                        }
-                    }
-                }
             } catch (t: Throwable) {
                 if (!success) {
                     blended?.recycle()
@@ -410,23 +398,36 @@ class HdrViewModel : ViewModel() {
 
                 // 2. Refine shifts at full resolution
                 for (i in 1 until fullBitmaps.size) {
-                    val (dx, dy) = when (state.alignmentMode) {
-                        AlignmentMode.AUTO -> Pair(images[i].autoDx, images[i].autoDy)
-                        AlignmentMode.MANUAL -> Pair(images[i].manualDx, images[i].manualDy)
-                        AlignmentMode.NONE -> Pair(0, 0)
-                    }
+                    val targetImg = images[i]
+                    val tBitmap = fullBitmaps[i]
 
                     addLog("Applying sub-pixel translation alignment on frame #${i + 1}...")
                     
-                    // Ratio estimation is based on 128 downsample
-                    val scaleFactor = refW.toFloat() / 128f
+                    val (tx, ty) = when (state.alignmentMode) {
+                        AlignmentMode.AUTO -> {
+                            val scaleX = refW.toFloat() / 128f
+                            val scaleY = refH.toFloat() / 128f
+                            // AUTO registration shift is negated to align
+                            Pair(-targetImg.autoDx * scaleX, -targetImg.autoDy * scaleY)
+                        }
+                        AlignmentMode.MANUAL -> {
+                            val previewW = targetImg.bitmap?.width ?: 1
+                            val previewH = targetImg.bitmap?.height ?: 1
+                            val scaleX = refW.toFloat() / previewW.toFloat()
+                            val scaleY = refH.toFloat() / previewH.toFloat()
+                            Pair(targetImg.manualDx * scaleX, targetImg.manualDy * scaleY)
+                        }
+                        AlignmentMode.NONE -> {
+                            Pair(0f, 0f)
+                        }
+                    }
+
                     val shifted = HdrEngine.refineAndShiftBitmap(
                         refWidth = refW,
                         refHeight = refH,
-                        target = fullBitmaps[i],
-                        offsetDx = dx,
-                        offsetDy = dy,
-                        scaleFactor = scaleFactor
+                        target = tBitmap,
+                        tx = tx,
+                        ty = ty
                     )
                     alignedList.add(shifted)
                 }
