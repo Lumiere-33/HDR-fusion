@@ -1,0 +1,6 @@
+{
+  "name": "HDR Fusion",
+  "description": "Combine 2 or 3 photos into a single high-quality HDR-blended exposure with adjustable intensity and auto-alignment options.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer gold lens ring -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,54m-20,0a20,20 0,1 1,40 0a20,20 0,1 1,-40 0"
+        android:strokeWidth="3.5"
+        android:strokeColor="#FFA000" />
+    <!-- Inner glass lens ring -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,54m-14,0a14,14 0,1 1,28 0a14,14 0,1 1,-28 0"
+        android:strokeWidth="1.5"
+        android:strokeColor="#FFC107" />
+    <!-- Aperture blade lines inside -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M40,54 L68,54 M54,40 L54,68 M44,44 L64,64 M44,64 L64,44"
+        android:strokeWidth="1"
+        android:strokeColor="#1E2024" />
+    <!-- Core exposure center dot -->
+    <path
+        android:fillColor="#FFA000"
+        android:pathData="M54,54m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0" />
+    <!-- Horizontal exposure bracket lines (symbolic overlay) -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M22,34 H42 M22,74 H42 M66,34 H86 M66,74 H86"
+        android:strokeWidth="2.5"
+        android:strokeColor="#FFA000"
+        android:strokeLineCap="round" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M22,34 V42 M22,74 V66 M86,34 V42 M86,74 V66"
+        android:strokeWidth="2.5"
+        android:strokeColor="#FFA000"
+        android:strokeLineCap="round" />
+</vector>
