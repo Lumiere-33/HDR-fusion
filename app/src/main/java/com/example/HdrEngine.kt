@@ -193,6 +193,7 @@ object HdrEngine {
         // Compute 8-bit local Census Transform for structural matching across bracketed exposures
         val censusRef = ByteArray(w * h)
         val censusTarget = ByteArray(w * h)
+        val validRef = BooleanArray(w * h)
 
         for (y in 1 until h - 1) {
             val row = y * w
@@ -211,6 +212,20 @@ object HdrEngine {
                 if (grayRef[idx + w] > centerR)     codeR = codeR or 64
                 if (grayRef[idx + w + 1] > centerR) codeR = codeR or 128
                 censusRef[idx] = codeR.toByte()
+
+                // Calculate contrast filtering mask for reference pixels to ignore low-contrast noisy regions (like sky)
+                var minValR = centerR
+                var maxValR = centerR
+                val neighbors = intArrayOf(
+                    grayRef[idx - w - 1], grayRef[idx - w], grayRef[idx - w + 1],
+                    grayRef[idx - 1],                       grayRef[idx + 1],
+                    grayRef[idx + w - 1], grayRef[idx + w], grayRef[idx + w + 1]
+                )
+                for (v in neighbors) {
+                    if (v < minValR) minValR = v
+                    if (v > maxValR) maxValR = v
+                }
+                validRef[idx] = (maxValR - minValR) >= 12
 
                 // Census Transform for Target Image
                 val centerT = grayTarget[idx]
@@ -235,6 +250,20 @@ object HdrEngine {
         val searchRange = 12
         val border = 16
 
+        // Determine if we should filter by contrast (ensure we have enough textured reference pixels)
+        var texturedPixelCount = 0
+        for (y in border until (h - border)) {
+            val row = y * w
+            for (x in border until (w - border)) {
+                if (validRef[row + x]) {
+                    texturedPixelCount++
+                }
+            }
+        }
+        val totalSearchPixels = (h - 2 * border) * (w - 2 * border)
+        // If we have at least 5% textured pixels, use contrast filtering. Otherwise use all pixels.
+        val useContrastFiltering = texturedPixelCount > (totalSearchPixels * 0.05)
+
         for (dy in -searchRange..searchRange) {
             ensureActive()
             for (dx in -searchRange..searchRange) {
@@ -244,7 +273,11 @@ object HdrEngine {
                     val rowRefStart = y * w
                     val rowTargetStart = (y + dy) * w + dx
                     for (x in border until (w - border)) {
-                        val codeRef = censusRef[rowRefStart + x].toInt() and 0xFF
+                        val refIdx = rowRefStart + x
+                        if (useContrastFiltering && !validRef[refIdx]) {
+                            continue
+                        }
+                        val codeRef = censusRef[refIdx].toInt() and 0xFF
                         val codeTarget = censusTarget[rowTargetStart + x].toInt() and 0xFF
                         val diff = codeRef xor codeTarget
                         hammingDist += java.lang.Integer.bitCount(diff)
@@ -259,7 +292,8 @@ object HdrEngine {
             }
         }
 
-        return@withContext AlignmentResult(bestDx, bestDy)
+        // Return negative displacement since we need to apply the INVERSE translation to align the image
+        return@withContext AlignmentResult(-bestDx, -bestDy)
     }
 
     // High quality translation offset shifting utilizing Hardware-Accelerated Canvas
@@ -271,7 +305,11 @@ object HdrEngine {
         val tx = offsetDx * (refWidth.toFloat() / 128f)
         val ty = offsetDy * (refHeight.toFloat() / 128f)
         
-        canvas.drawBitmap(target, tx, ty, null)
+        val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            isFilterBitmap = true
+        }
+        canvas.drawBitmap(target, tx, ty, paint)
         return result
     }
 
