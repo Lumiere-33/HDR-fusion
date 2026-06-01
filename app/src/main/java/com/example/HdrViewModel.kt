@@ -360,6 +360,8 @@ class HdrViewModel : ViewModel() {
 
             // 1. Load full resolution images
             val fullBitmaps = mutableListOf<Bitmap>()
+            val alignedList = mutableListOf<Bitmap>()
+            var blended: Bitmap? = null
             var refW = 0
             var refH = 0
 
@@ -393,7 +395,6 @@ class HdrViewModel : ViewModel() {
                     return@launch
                 }
 
-                val alignedList = mutableListOf<Bitmap>()
                 alignedList.add(fullBitmaps[0])
 
                 // 2. Refine shifts at full resolution
@@ -434,28 +435,20 @@ class HdrViewModel : ViewModel() {
 
                 // 3. Blend exposures
                 addLog("Fusing exposures with high precision color mapping...")
-                val blended = HdrEngine.blendExposures(
+                val blendedResult = HdrEngine.blendExposures(
                     alignedList,
                     state.intensity,
                     state.blendStyle,
                     state.shadows,
                     state.highlights
                 )
+                blended = blendedResult
 
                 // 4. Save to gallery
                 addLog("Compressing dynamic range and saving image...")
                 val timestamp = System.currentTimeMillis()
                 val filename = "HDR_FUSION_$timestamp.jpg"
-                val uri = HdrEngine.saveBitmapToGallery(context, blended, filename)
-
-                // 5. Clean up allocations
-                blended.recycle()
-                for (i in 0 until fullBitmaps.size) {
-                    fullBitmaps[i].recycle()
-                }
-                for (i in 1 until alignedList.size) {
-                    alignedList[i].recycle()
-                }
+                val uri = HdrEngine.saveBitmapToGallery(context, blendedResult, filename)
 
                 if (uri != null) {
                     addLog("Saved to gallery: Pictures/HDRFusion/$filename")
@@ -482,6 +475,16 @@ class HdrViewModel : ViewModel() {
                         statusText = "Error during save operation: ${e.localizedMessage}"
                     )
                 }
+            } finally {
+                // Ensure all full-res allocations are strictly recycled to prevent OOM process crash
+                blended?.let { if (!it.isRecycled) it.recycle() }
+                fullBitmaps.forEach { if (!it.isRecycled) it.recycle() }
+                alignedList.forEach {
+                    if (it != fullBitmaps.getOrNull(0) && !it.isRecycled) {
+                        it.recycle()
+                    }
+                }
+                addLog("High-resolution memory allocations reclaimed.")
             }
         }
     }
